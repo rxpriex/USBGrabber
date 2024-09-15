@@ -36,7 +36,8 @@ public:
     ULARGE_INTEGER freeBytes, totalBytes, totalFreeBytes;
 };
 
-diskSize driveSpace(const std::wstring& drivePath) {
+diskSize driveSpace(const std::wstring& drivePath) 
+{
     diskSize result;
 
     ULARGE_INTEGER freeBytes = {};
@@ -58,6 +59,70 @@ diskSize driveSpace(const std::wstring& drivePath) {
     return result;
 }
 
+struct volumeInformation 
+{
+private:
+    std::wstring drivePath = L"C:\\";
+    wchar_t volumeName[MAX_PATH + 1] = { 0 };  
+    DWORD serialNumber = 0;                   
+    DWORD maxComponentLength = 0;              
+    DWORD fileSystemFlags = 0;                
+    wchar_t fileSystemName[MAX_PATH + 1] = { 0 };
+
+public:
+    void setDrivePath(const std::wstring& path) { drivePath = path; }
+
+    std::wstring getDrivePath() const 
+    {
+        return drivePath;
+    }
+
+    std::wstring getVolumeName() const 
+    {
+        return std::wstring(volumeName);
+    }
+
+    std::wstring getFileSystemName() const 
+    {
+        return std::wstring(fileSystemName);
+    }
+
+    std::wstring getSerialNumber() const 
+    {
+        return std::to_wstring(serialNumber);
+    }
+
+    DWORD getMaxComponentLength() const 
+    {
+        return maxComponentLength;
+    }
+
+    DWORD getFileSystemFlags() const 
+    {
+        return fileSystemFlags;
+    }
+    static volumeInformation fetchVolumeInformation(const std::wstring& path) 
+    {
+        volumeInformation vInfo;
+        vInfo.setDrivePath(path);
+
+        if (!GetVolumeInformationW(
+            vInfo.drivePath.c_str(),
+            vInfo.volumeName,
+            MAX_PATH + 1,
+            &vInfo.serialNumber,
+            &vInfo.maxComponentLength,
+            &vInfo.fileSystemFlags,
+            vInfo.fileSystemName,
+            MAX_PATH + 1)) {
+            DWORD error = GetLastError();
+            std::wcerr << L"Couldn't access Volume Information, Error: " << error << std::endl;
+        }
+
+        return vInfo;
+    }
+};
+
 void copyFilesInDirectory(const std::wstring& path, const std::wstring& targetpath) 
 {
     float progress = 0.0;
@@ -76,7 +141,10 @@ void copyFilesInDirectory(const std::wstring& path, const std::wstring& targetpa
     try {
         diskSize ds = driveSpace(path);
         std::cout << "---filecopy---" << std::endl;
-        std::wcout << "DataSize: <" << (float)(ds.totalBytes.QuadPart - ds.totalFreeBytes.QuadPart) / 1000 << " megabytes>" << std::endl;
+        std::wcout << std::fixed << std::setprecision(1)
+            << L"DataSize: <"
+            << (float)(ds.totalBytes.QuadPart - ds.totalFreeBytes.QuadPart) / (1024 * 1024)
+            << L" MB>" << std::endl;
         for (const auto& entry : std::filesystem::directory_iterator(path)) {
             if (entry.path().filename() == "System Volume Information" ||
                 entry.path().filename() == "$RECYCLE.BIN") {
@@ -94,22 +162,6 @@ void copyFilesInDirectory(const std::wstring& path, const std::wstring& targetpa
     }
 }
 
-std::wstring getVolumeSerialNumber(const std::wstring& drivePath) 
-{
-    DWORD serialNumber = 0;
-    if (GetVolumeInformation(
-        drivePath.c_str(),
-        NULL, 0, &serialNumber, NULL, NULL, NULL, 0)) {
-        std::wstringstream ss;
-        ss << std::hex << serialNumber;
-        return ss.str();
-    }
-    else {
-        std::wcerr << L"Failed to get volume information. Error: " << GetLastError() << std::endl;
-        return L"";
-    }
-}
-
 bool contains(std::wifstream& stream, std::wstring target) 
 {
     std::wstring line;
@@ -123,14 +175,14 @@ bool contains(std::wifstream& stream, std::wstring target)
 
 bool qualifysForDownload(std::wstring& drivePath) 
 {
-    std::wstring serialNumber = getVolumeSerialNumber(drivePath) + L"|";
+    std::wstring serialNumber = volumeInformation::fetchVolumeInformation(drivePath).getSerialNumber() + L"|";
     std::wifstream driveInfo = std::wifstream(datFileLocation);
     return contains(driveInfo, serialNumber + std::to_wstring(driveSpace(drivePath).totalFreeBytes.QuadPart));
 }
 
-void logDrive(std::wstring& path) 
+void logDrive(std::wstring& drivePath)
 {
-    driveMask << getVolumeSerialNumber(path) << L"|" << driveSpace(path).totalFreeBytes.QuadPart << std::endl;
+    driveMask << volumeInformation::fetchVolumeInformation(drivePath).getSerialNumber() << L"|" << driveSpace(drivePath).totalFreeBytes.QuadPart << std::endl;
 }
 
 static std::vector<std::wstring> volumeList;
@@ -147,8 +199,11 @@ void processDrives()
                 for (std::wstring wstr : volumeList) {
                     if (!qualifysForDownload(drivePath)) {
                         logDrive(drivePath);
+                        volumeInformation vi = volumeInformation::fetchVolumeInformation(drivePath);
+                        std::wcout << "Drive qualifys for download: " << vi.getVolumeName() << std::endl;
                         std::wstring target = std::wstring() + L"C:\\Users\\Public\\Documents\\";
-                        target.append(getVolumeSerialNumber(drivePath));
+                        target.append(vi.getVolumeName());
+                        target.append(L"(" + vi.getSerialNumber() + L")");
                         copyFilesInDirectory(drivePath, target);
                     }
                 }
